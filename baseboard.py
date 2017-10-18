@@ -22,9 +22,12 @@ class BaseboardDemo(Module):
         adc = plat.request("adc")
         ssd = plat.request("sevenseg")
         bits = Signal(4)
+        ch_sel = Signal(3)
+
+        binary_in = Signal(10)
 
         leds = Cat([plat.request("user_led") for _ in range(4)])
-        sw = plat.request("sw")
+        # sw = plat.request("sw")
 
         # stb = plat.request("user_led")
 
@@ -32,35 +35,43 @@ class BaseboardDemo(Module):
         self.submodules.timer = Timer(1.0/200)
         self.submodules.bin2bcd = Binary2Bcd()
         self.submodules.sevenseg = SevenSegDriver(ssd)
+        self.submodules.degrees = Adc2Degrees()
+
+
+        # ADC order is MSB-first (bit 0 == MSB)
+        # Bit 7: Start bit
+
+        spi_word = Cat(
+            C(0, 8),
+            C(0, 4),
+            ch_sel, # Channel select
+            C(1, 1), # Single-ended
+            C(1, 1), # Start
+            C(0, 7) # Padding
+        )
 
         self.comb += [
-            self.spiadc.din.eq(0x01C000),
-            self.sevenseg.din.eq(Mux(sw, self.bin2bcd.dout, self.spiadc.dout))
-        ]
+            ch_sel.eq(Cat([plat.request("sw") for i in range(3)])),
+            self.spiadc.din.eq(spi_word),
+            self.sevenseg.din.eq(self.bin2bcd.dout),
+            self.degrees.adc.eq(binary_in),
 
-        # self.sync += [
-        #     If(self.timer.stb,
-        #         stb.eq(~stb)
-        #     )
-        # ]
+            Case(ch_sel, {
+                2 : self.bin2bcd.din.eq(self.degrees.degrees),
+                "default" : self.bin2bcd.din.eq(binary_in)
+            })
+        ]
 
         self.sync += [
             self.spiadc.en.eq(0),
             self.bin2bcd.en.eq(0),
             If(self.spiadc.done & self.timer.stb,
                 self.spiadc.en.eq(1),
-                # leds.eq(self.spiadc.dout[6:10])
                 self.bin2bcd.en.eq(1),
-                self.bin2bcd.din.eq(self.spiadc.dout)
+                # leds.eq(self.spiadc.
+                binary_in.eq(self.spiadc.dout)
             )
         ]
-
-        # bus = plat.request("gpio_sram_bus")
-        # pmod = plat.request("pmod_gpio")
-        #
-        # for j in range(4):
-        #     s = plat.request("sw")
-        #     self.comb += [pmod[j].eq(s)]
 
 
 
@@ -75,6 +86,19 @@ class Timer(Module):
             If(cnt == 0,
                 cnt.eq(int(per * clk_freq)),
                 self.stb.eq(1)
+            )
+        ]
+
+
+class Adc2Degrees(Module):
+    def __init__(self):
+        self.adc = Signal(10)
+        self.degrees = Signal(10)
+
+        # c = (z - 82)/4 is a good approx to
+        self.comb += [
+            self.degrees.eq(
+                (self.adc - 82) >> 2
             )
         ]
 
