@@ -8,28 +8,17 @@ from migen.build.generic_platform import *
 class BaseboardDemo(Module):
     def __init__(self, plat):
         plat.add_extension(mercury.sw)
-        plat.add_extension(mercury.leds)
+        # plat.add_extension(mercury.leds)
         plat.add_extension(mercury.gpio_sram)
         plat.add_extension(mercury.sevenseg)
         pmod = [("pmod_gpio", 0, Pins("""PMOD:0 PMOD:1 PMOD:2 PMOD:3 PMOD:4 PMOD:5 PMOD:6 PMOD:7"""))]
         plat.add_extension(pmod)
 
-        # for i in range(4):
-        #     s = plat.request("sw")
-        #     l = plat.request("user_led")
-        #     self.comb += [l.eq(s)]
-
         adc = plat.request("adc")
         ssd = plat.request("sevenseg")
         bits = Signal(4)
         ch_sel = Signal(3)
-
         binary_in = Signal(10)
-
-        leds = Cat([plat.request("user_led") for _ in range(4)])
-        # sw = plat.request("sw")
-
-        # stb = plat.request("user_led")
 
         self.submodules.spiadc = SPICtrl(24, adc)
         self.submodules.timer = Timer(1.0/200)
@@ -37,10 +26,8 @@ class BaseboardDemo(Module):
         self.submodules.sevenseg = SevenSegDriver(ssd)
         self.submodules.degrees = Adc2Degrees()
 
-
         # ADC order is MSB-first (bit 0 == MSB)
         # Bit 7: Start bit
-
         spi_word = Cat(
             C(0, 8),
             C(0, 4),
@@ -74,7 +61,6 @@ class BaseboardDemo(Module):
         ]
 
 
-
 class Timer(Module):
     def __init__(self, per=1, clk_freq=50000000):
         self.stb = Signal(1)
@@ -95,7 +81,7 @@ class Adc2Degrees(Module):
         self.adc = Signal(10)
         self.degrees = Signal(10)
 
-        # c = (z - 82)/4 is a good approx to
+        # c = (z - 82)/4 is a good approx to Celsius
         self.comb += [
             self.degrees.eq(
                 (self.adc - 82) >> 2
@@ -310,11 +296,7 @@ class SPICtrl(Module):
         ]
 
 
-
-
-if __name__ == "__main__":
-    # m = Binary2Bcd()
-    # m.do_tb()
+if __name__ == "__main
     plat = mercury.Platform()
     m = BaseboardDemo(plat)
     plat.build(m, source=True, run=True, build_dir="build", build_name="bbdemo")
