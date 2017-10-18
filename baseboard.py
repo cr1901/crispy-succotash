@@ -1,4 +1,5 @@
 import functools
+import subprocess
 
 from migen import *
 from migen.build.platforms import mercury
@@ -28,7 +29,7 @@ class BaseboardDemo(Module):
         # stb = plat.request("user_led")
 
         self.submodules.spiadc = SPICtrl(24, adc)
-        self.submodules.timer = Timer()
+        self.submodules.timer = Timer(1.0/200)
         self.submodules.bin2bcd = Binary2Bcd()
         self.submodules.sevenseg = SevenSegDriver(ssd)
 
@@ -287,14 +288,10 @@ class SPICtrl(Module):
 
 
 
-
-
-
-
-
 if __name__ == "__main__":
     # m = Binary2Bcd()
     # m.do_tb()
     plat = mercury.Platform()
     m = BaseboardDemo(plat)
     plat.build(m, source=True, run=True, build_dir="build", build_name="bbdemo")
+    subprocess.call(["mercpcl", "build/bbdemo.bin"])
