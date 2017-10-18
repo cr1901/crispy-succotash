@@ -1,7 +1,9 @@
 import functools
 import subprocess
+import argparse
 
 from migen import *
+from migen.genlib.cdc import MultiReg
 from migen.build.platforms import mercury
 from migen.build.generic_platform import *
 
@@ -59,6 +61,36 @@ class BaseboardDemo(Module):
                 binary_in.eq(self.spiadc.dout)
             )
         ]
+
+
+class Debounce(Module):
+    def __init__(self, button):
+        self.out = Signal(1)
+        self.up_stb = Signal(1)
+        self.down_stb = Signal(1)
+
+        button_sys = Signal()
+        last_state = Signal(1)
+        cnt = Signal(16)
+
+        self.comb += [self.out.eq(last_state)]
+        self.comb += [self.down_stb.eq((cnt == 65535) & last_state == 1)]
+        self.comb += [self.up_stb.eq((cnt == 65535) & last_state == 0)]
+
+        self.sync += [
+            cnt.eq(0),
+            If(button_sys != last_state,
+                cnt.eq(cnt + 1),
+                If(cnt == 65535,
+                    last_state.eq(~last_state),
+                )
+            )
+        ]
+
+        self.specials += Multireg(button, button_sys)
+
+
+
 
 
 class Timer(Module):
@@ -296,8 +328,8 @@ class SPICtrl(Module):
         ]
 
 
-if __name__ == "__main
+if __name__ == "__main__":
     plat = mercury.Platform()
     m = BaseboardDemo(plat)
-    plat.build(m, source=True, run=True, build_dir="build", build_name="bbdemo")
+    plat.build(m, source=True, run=False, build_dir="build", build_name="bbdemo")
     subprocess.call(["mercpcl", "build/bbdemo.bin"])
