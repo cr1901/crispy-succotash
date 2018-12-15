@@ -7,17 +7,23 @@ from migen.genlib.cdc import MultiReg
 from migen.build.platforms import mercury
 from migen.build.generic_platform import *
 
+
+# TODO: Button/logging test via VGA.
+# One button starts/stops logging
+# One dumps data over PMOD.
+
 class BaseboardDemo(Module):
     def __init__(self, plat):
         plat.add_extension(mercury.sw)
         # plat.add_extension(mercury.leds)
         plat.add_extension(mercury.gpio_sram)
         plat.add_extension(mercury.sevenseg)
-        pmod = [("pmod_gpio", 0, Pins("""PMOD:0 PMOD:1 PMOD:2 PMOD:3 PMOD:4 PMOD:5 PMOD:6 PMOD:7"""))]
+        pmod = [("pmod_gpio", 0, Pins("""PMOD:0 PMOD:1 PMOD:2 PMOD:3 PMOD:4 PMOD:5 PMOD:6 PMOD:7"""), IOStandard("LVTTL"))]
         plat.add_extension(pmod)
 
         adc = plat.request("adc")
         ssd = plat.request("sevenseg")
+        #pmod = plat.request("pmod_gpio")
         bits = Signal(4)
         ch_sel = Signal(3)
         binary_in = Signal(10)
@@ -50,6 +56,13 @@ class BaseboardDemo(Module):
                 "default" : self.bin2bcd.din.eq(binary_in)
             })
         ]
+
+        # self.comb += [
+        #     pmod[0].eq(adc.clk),
+        #     pmod[1].eq(adc.miso),
+        #     pmod[2].eq(adc.mosi),
+        #     pmod[3].eq(adc.cs_n)
+        # ]
 
         self.sync += [
             self.spiadc.en.eq(0),
@@ -329,7 +342,15 @@ class SPICtrl(Module):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Mercury Baseboard Demo in Migen")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('-p', dest='prog', action='store_true', help="Program Mercury after build.")
+    group.add_argument('-g', dest='gen', action='store_true', help="Generate verilog only- do not build or program.")
+    args = parser.parse_args()
+
     plat = mercury.Platform()
     m = BaseboardDemo(plat)
-    plat.build(m, source=True, run=False, build_dir="build", build_name="bbdemo")
-    subprocess.call(["mercpcl", "build/bbdemo.bin"])
+
+    plat.build(m, source=True, run=(not args.gen), build_dir="build", build_name="bbdemo")
+    if args.prog:
+        subprocess.call(["mercpcl", "build/bbdemo.bin"])
