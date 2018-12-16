@@ -2,29 +2,31 @@ import functools
 import subprocess
 import argparse
 
+from types import SimpleNamespace
+
 from nmigen.compat import *
 from nmigen.compat.genlib.cdc import MultiReg
 from nmigen.back import rtlil, verilog
 
-from types import SimpleNamespace
+from edalize import *
 
 
 class MockPlatform:
     def __init__(self):
-        self.adc = SimpleNamespace(clk=Signal(1), miso=Signal(1), mosi=Signal(1),
-                              cs_n=Signal(1))
-        self.sevenseg = SimpleNamespace(enable0=Signal(1),
-                              enable1=Signal(1),
-                              enable2=Signal(1),
-                              enable3=Signal(1),
-                              segment0=Signal(1),
-                              segment1=Signal(1),
-                              segment2=Signal(1),
-                              segment3=Signal(1),
-                              segment4=Signal(1),
-                              segment5=Signal(1),
-                              segment6=Signal(1),
-                              segment7=Signal(1))
+        self.adc = SimpleNamespace(clk=Signal(1, "clk"), miso=Signal(1, "miso"), mosi=Signal(1, "mosi"),
+                              cs_n=Signal(1, "cs_n"))
+        self.sevenseg = SimpleNamespace(enable0=Signal(1, "enable0"),
+                              enable1=Signal(1, "enable1"),
+                              enable2=Signal(1, "enable2"),
+                              enable3=Signal(1, "enable3"),
+                              segment0=Signal(1, "segment0"),
+                              segment1=Signal(1, "segment1"),
+                              segment2=Signal(1, "segment2"),
+                              segment3=Signal(1, "segment3"),
+                              segment4=Signal(1, "segment4"),
+                              segment5=Signal(1, "segment5"),
+                              segment6=Signal(1, "segment6"),
+                              segment7=Signal(1, "segment7"))
         self.pmod_gpio = Signal(8)
         self.sw = Signal(3)
 
@@ -369,5 +371,35 @@ if __name__ == "__main__":
     plat = MockPlatform()
     m = BaseboardDemo(plat)
 
-    # print(rtlil.convert(m.get_fragment().get_fragment(platform=None), ports=[plat.adc.miso]))
-    print(verilog.convert(m.get_fragment().get_fragment(platform=None), ports=[plat.adc.miso]))
+    v_str = verilog.convert(m.get_fragment().get_fragment(platform=None),
+                            ports=[plat.adc.miso, plat.adc.mosi, plat.adc.clk,
+                                   plat.adc.cs_n, plat.sevenseg.enable0,
+                                   plat.sevenseg.enable1,
+                                   plat.sevenseg.enable2,
+                                   plat.sevenseg.enable3,
+                                   plat.sevenseg.segment0,
+                                   plat.sevenseg.segment1,
+                                   plat.sevenseg.segment2,
+                                   plat.sevenseg.segment3,
+                                   plat.sevenseg.segment4,
+                                   plat.sevenseg.segment5,
+                                   plat.sevenseg.segment6,
+                                   plat.sevenseg.segment7,
+                                   plat.sw])
+    with open("baseboard.v", "w") as fp:
+        fp.write(v_str)
+
+    backend = get_edatool("ise")(eda_api={ "name" : "build_new",
+                                           "toplevel" : "top",
+                                           "files" : [{"name" : "../baseboard.v", "file_type" : "verilogSource"},
+                                                      {"name" : "../baseboard.ucf", "file_type" : "UCF"}],
+                                           "tool_options" : {
+                                                "ise" : {
+                                                            "family" : "Spartan3",
+                                                            "device" : "xc3s200",
+                                                            "package" : "vq100",
+                                                            "speed" : "-4"
+                                                        }
+                                            }
+                                         }, work_root="build_new")
+    backend.configure(args=[])

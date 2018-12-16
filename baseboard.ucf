@@ -1,0 +1,24 @@
+NET "cs_n" LOC=P12 | IOSTANDARD=LVTTL; # adc:0.cs_n
+NET "clk" LOC=P9 | IOSTANDARD=LVTTL; # adc:0.clk
+NET "mosi" LOC=P10 | IOSTANDARD=LVTTL; # adc:0.mosi
+NET "miso" LOC=P21 | IOSTANDARD=LVTTL; # adc:0.miso
+NET "segment7" LOC=P83 | IOSTANDARD=LVTTL; # sevenseg:0.segment7
+NET "segment6" LOC=P78 | IOSTANDARD=LVTTL; # sevenseg:0.segment6
+NET "segment5" LOC=P77 | IOSTANDARD=LVTTL; # sevenseg:0.segment5
+NET "segment4" LOC=P65 | IOSTANDARD=LVTTL; # sevenseg:0.segment4
+NET "segment3" LOC=P70 | IOSTANDARD=LVTTL; # sevenseg:0.segment3
+NET "segment2" LOC=P71 | IOSTANDARD=LVTTL; # sevenseg:0.segment2
+NET "segment1" LOC=P72 | IOSTANDARD=LVTTL; # sevenseg:0.segment1
+NET "segment0" LOC=P73 | IOSTANDARD=LVTTL; # sevenseg:0.segment0
+NET "enable0" LOC=P50 | IOSTANDARD=LVTTL; # sevenseg:0.enable0
+NET "enable1" LOC=P49 | IOSTANDARD=LVTTL; # sevenseg:0.enable1
+NET "enable2" LOC=P85 | IOSTANDARD=LVTTL; # sevenseg:0.enable2
+NET "enable3" LOC=P84 | IOSTANDARD=LVTTL; # sevenseg:0.enable3
+NET "sw[0]" LOC=P59 | IOSTANDARD=LVTTL; # sw:0
+NET "sw[1]" LOC=P60 | IOSTANDARD=LVTTL; # sw:1
+NET "sw[2]" LOC=P61 | IOSTANDARD=LVTTL; # sw:2
+NET "clk" LOC=P43 | IOSTANDARD=LVCMOS33; # clk50:0
+
+
+NET "clk" TNM_NET = "PRDclk50";
+TIMESPEC "TSclk50" = PERIOD "PRDclk50" 20 ns HIGH 50%;
