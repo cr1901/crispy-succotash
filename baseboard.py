@@ -2,10 +2,34 @@ import functools
 import subprocess
 import argparse
 
-from migen import *
-from migen.genlib.cdc import MultiReg
-from migen.build.platforms import mercury
-from migen.build.generic_platform import *
+from nmigen.compat import *
+from nmigen.compat.genlib.cdc import MultiReg
+from nmigen.back import rtlil, verilog
+
+from types import SimpleNamespace
+
+
+class MockPlatform:
+    def __init__(self):
+        self.adc = SimpleNamespace(clk=Signal(1), miso=Signal(1), mosi=Signal(1),
+                              cs_n=Signal(1))
+        self.sevenseg = SimpleNamespace(enable0=Signal(1),
+                              enable1=Signal(1),
+                              enable2=Signal(1),
+                              enable3=Signal(1),
+                              segment0=Signal(1),
+                              segment1=Signal(1),
+                              segment2=Signal(1),
+                              segment3=Signal(1),
+                              segment4=Signal(1),
+                              segment5=Signal(1),
+                              segment6=Signal(1),
+                              segment7=Signal(1))
+        self.pmod_gpio = Signal(8)
+        self.sw = Signal(3)
+
+    def request(self, name):
+        return getattr(self, name)
 
 
 # TODO: Button/logging test via VGA.
@@ -14,16 +38,10 @@ from migen.build.generic_platform import *
 
 class BaseboardDemo(Module):
     def __init__(self, plat):
-        plat.add_extension(mercury.sw)
-        # plat.add_extension(mercury.leds)
-        plat.add_extension(mercury.gpio_sram)
-        plat.add_extension(mercury.sevenseg)
-        pmod = [("pmod_gpio", 0, Pins("""PMOD:0 PMOD:1 PMOD:2 PMOD:3 PMOD:4 PMOD:5 PMOD:6 PMOD:7"""), IOStandard("LVTTL"))]
-        plat.add_extension(pmod)
 
         adc = plat.request("adc")
         ssd = plat.request("sevenseg")
-        #pmod = plat.request("pmod_gpio")
+        pmod = plat.request("pmod_gpio")
         bits = Signal(4)
         ch_sel = Signal(3)
         binary_in = Signal(10)
@@ -348,9 +366,8 @@ if __name__ == "__main__":
     group.add_argument('-g', dest='gen', action='store_true', help="Generate verilog only- do not build or program.")
     args = parser.parse_args()
 
-    plat = mercury.Platform()
+    plat = MockPlatform()
     m = BaseboardDemo(plat)
 
-    plat.build(m, source=True, run=(not args.gen), build_dir="build", build_name="bbdemo")
-    if args.prog:
-        subprocess.call(["mercpcl", "build/bbdemo.bin"])
+    # print(rtlil.convert(m.get_fragment().get_fragment(platform=None), ports=[plat.adc.miso]))
+    print(verilog.convert(m.get_fragment().get_fragment(platform=None), ports=[plat.adc.miso]))
