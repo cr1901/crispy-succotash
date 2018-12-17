@@ -13,8 +13,10 @@ from edalize import *
 
 class MockPlatform:
     def __init__(self):
-        self.adc = SimpleNamespace(clk=Signal(1, "clk"), miso=Signal(1, "miso"), mosi=Signal(1, "mosi"),
-                              cs_n=Signal(1, "cs_n"))
+        self.adc = SimpleNamespace(clk=Signal(1, "spi_clk"),
+                                   miso=Signal(1, "spi_miso"),
+                                   mosi=Signal(1, "spi_mosi"),
+                                   cs_n=Signal(1, "spi_cs_n"))
         self.sevenseg = SimpleNamespace(enable0=Signal(1, "enable0"),
                               enable1=Signal(1, "enable1"),
                               enable2=Signal(1, "enable2"),
@@ -40,6 +42,7 @@ class MockPlatform:
 
 class BaseboardDemo(Module):
     def __init__(self, plat):
+        self.clock_domains.cd_sync = ClockDomain(reset_less=True)
 
         adc = plat.request("adc")
         ssd = plat.request("sevenseg")
@@ -395,8 +398,8 @@ if __name__ == "__main__":
                                                       {"name" : "../baseboard.ucf", "file_type" : "UCF"}],
                                            "tool_options" : {
                                                 "ise" : {
-                                                            "family" : "Spartan3",
-                                                            "device" : "xc3s200",
+                                                            "family" : "Spartan3A",
+                                                            "device" : "xc3s200a",
                                                             "package" : "vq100",
                                                             "speed" : "-4"
                                                         }

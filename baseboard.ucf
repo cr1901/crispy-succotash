@@ -1,7 +1,7 @@
-NET "cs_n" LOC=P12 | IOSTANDARD=LVTTL; # adc:0.cs_n
-NET "clk" LOC=P9 | IOSTANDARD=LVTTL; # adc:0.clk
-NET "mosi" LOC=P10 | IOSTANDARD=LVTTL; # adc:0.mosi
-NET "miso" LOC=P21 | IOSTANDARD=LVTTL; # adc:0.miso
+NET "spi_cs_n" LOC=P12 | IOSTANDARD=LVTTL; # adc:0.cs_n
+NET "spi_clk" LOC=P9 | IOSTANDARD=LVTTL; # adc:0.clk
+NET "spi_mosi" LOC=P10 | IOSTANDARD=LVTTL; # adc:0.mosi
+NET "spi_miso" LOC=P21 | IOSTANDARD=LVTTL; # adc:0.miso
 NET "segment7" LOC=P83 | IOSTANDARD=LVTTL; # sevenseg:0.segment7
 NET "segment6" LOC=P78 | IOSTANDARD=LVTTL; # sevenseg:0.segment6
 NET "segment5" LOC=P77 | IOSTANDARD=LVTTL; # sevenseg:0.segment5
