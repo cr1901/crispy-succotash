@@ -69,7 +69,8 @@ class BaseboardDemo(Module):
         )
 
         self.comb += [
-            ch_sel.eq(Cat([plat.request("sw") for i in range(3)])),
+            ch_sel.eq(plat.request("sw")),
+            # ch_sel.eq(Cat([plat.request("sw") for i in range(3)])),
             self.spiadc.din.eq(spi_word),
             self.sevenseg.din.eq(self.bin2bcd.dout),
             self.degrees.adc.eq(binary_in),
@@ -392,17 +393,20 @@ if __name__ == "__main__":
     with open("baseboard.v", "w") as fp:
         fp.write(v_str)
 
-    backend = get_edatool("ise")(eda_api={ "name" : "build_new",
+    backend = get_edatool("ise")(eda_api={ "name" : "build_newer",
                                            "toplevel" : "top",
-                                           "files" : [{"name" : "../baseboard.v", "file_type" : "verilogSource"},
-                                                      {"name" : "../baseboard.ucf", "file_type" : "UCF"}],
+                                           "files" : [
+                                                        {"name" : "../baseboard.v", "file_type" : "verilogSource"},
+                                                        {"name" : "../baseboard.ucf", "file_type" : "UCF"},
+                                                        {"name" : "../baseboard.tcl", "file_type" : "tclSource"}
+                                                     ],
                                            "tool_options" : {
                                                 "ise" : {
                                                             "family" : "Spartan3A",
                                                             "device" : "xc3s200a",
                                                             "package" : "vq100",
                                                             "speed" : "-4"
-                                                        }
-                                            }
-                                         }, work_root="build_new")
+                                                        },
+                                            },
+                                         }, work_root="build_newer")
     backend.configure(args=[])

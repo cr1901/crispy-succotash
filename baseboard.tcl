@@ -1,0 +1,8 @@
+project set "Other XST Command Line Options" "-use_new_parser yes" -process "Synthesize - XST"
+project set "Optimization Goal" "Area" -process "Synthesize - XST"
+project set "Register Balancing" "Yes" -process "Synthesize - XST"
+project set "Perform Timing-Driven Packing and Placement" TRUE -process "Map"
+project set "Map Effort Level" "High" -process "Map"
+project set "Other Map Command Line Options" "-w" -process "Map"
+project set "Place & Route Effort Level" "High" -process "Place & Route"
+project set "Create Binary Configuration File" TRUE -process "Generate Programming File"
