@@ -1,3 +1,4 @@
+import os
 import functools
 import subprocess
 import argparse
@@ -8,33 +9,7 @@ from nmigen.compat import *
 from nmigen.compat.genlib.cdc import MultiReg
 from nmigen.back import rtlil, verilog
 
-from edalize import *
-
-
-class MockPlatform:
-    def __init__(self):
-        self.adc = SimpleNamespace(clk=Signal(1, "spi_clk"),
-                                   miso=Signal(1, "spi_miso"),
-                                   mosi=Signal(1, "spi_mosi"),
-                                   cs_n=Signal(1, "spi_cs_n"))
-        self.sevenseg = SimpleNamespace(enable0=Signal(1, "enable0"),
-                              enable1=Signal(1, "enable1"),
-                              enable2=Signal(1, "enable2"),
-                              enable3=Signal(1, "enable3"),
-                              segment0=Signal(1, "segment0"),
-                              segment1=Signal(1, "segment1"),
-                              segment2=Signal(1, "segment2"),
-                              segment3=Signal(1, "segment3"),
-                              segment4=Signal(1, "segment4"),
-                              segment5=Signal(1, "segment5"),
-                              segment6=Signal(1, "segment6"),
-                              segment7=Signal(1, "segment7"))
-        self.pmod_gpio = Signal(8)
-        self.sw = Signal(3)
-
-    def request(self, name):
-        return getattr(self, name)
-
+from nmigen_boards.mercury import *
 
 # TODO: Button/logging test via VGA.
 # One button starts/stops logging
@@ -46,7 +21,7 @@ class BaseboardDemo(Module):
 
         adc = plat.request("adc")
         ssd = plat.request("sevenseg")
-        pmod = plat.request("pmod_gpio")
+        # pmod = plat.request("pmod_gpio")
         bits = Signal(4)
         ch_sel = Signal(3)
         binary_in = Signal(10)
@@ -68,9 +43,10 @@ class BaseboardDemo(Module):
             C(0, 7) # Padding
         )
 
+        self.comb += [ClockSignal("sync").eq(plat.request("clk50"))]
+
         self.comb += [
-            ch_sel.eq(plat.request("sw")),
-            # ch_sel.eq(Cat([plat.request("sw") for i in range(3)])),
+            ch_sel.eq(Cat([plat.request("user_sw", i) for i in range(3)])),
             self.spiadc.din.eq(spi_word),
             self.sevenseg.din.eq(self.bin2bcd.dout),
             self.degrees.adc.eq(binary_in),
@@ -251,22 +227,22 @@ class SevenSegDriver(Module):
         ]
 
         self.comb += [
-            pads.enable0.eq(enable[0]),
-            pads.enable1.eq(enable[1]),
-            pads.enable2.eq(enable[2]),
-            pads.enable3.eq(enable[3]),
+            pads.en0.eq(enable[0]),
+            pads.en1.eq(enable[1]),
+            pads.en2.eq(enable[2]),
+            pads.en3.eq(enable[3]),
             switch_logic
         ]
 
         self.comb += [
-            pads.segment7.eq(~dout[7]),
-            pads.segment6.eq(~dout[6]),
-            pads.segment5.eq(~dout[5]),
-            pads.segment4.eq(~dout[4]),
-            pads.segment3.eq(~dout[3]),
-            pads.segment2.eq(~dout[2]),
-            pads.segment1.eq(~dout[1]),
-            pads.segment0.eq(~dout[0]),
+            pads.a.eq(dout[7]),
+            pads.b.eq(dout[6]),
+            pads.c.eq(dout[5]),
+            pads.d.eq(dout[4]),
+            pads.e.eq(dout[3]),
+            pads.f.eq(dout[2]),
+            pads.g.eq(dout[1]),
+            pads.dp.eq(dout[0]),
         ]
 
         self.comb +=  Case(curr_digit, {
@@ -330,7 +306,7 @@ class SPICtrl(Module):
         self.sync += [
             If(~in_prog,
                 pads.clk.eq(0),
-                pads.cs_n.eq(1),
+                pads.cs.eq(0),
                 div.eq(63),
                 edge_cnt.eq(width * 2)
             ),
@@ -338,7 +314,7 @@ class SPICtrl(Module):
             If(self.en & ~in_prog,
                 tmp.eq(self.din),
                 in_prog.eq(1),
-                pads.cs_n.eq(0)
+                pads.cs.eq(1)
             ),
 
             If(in_prog,
@@ -372,41 +348,13 @@ if __name__ == "__main__":
     group.add_argument('-g', dest='gen', action='store_true', help="Generate verilog only- do not build or program.")
     args = parser.parse_args()
 
-    plat = MockPlatform()
+    plat = MercuryPlatform()
+    plat.add_resources(plat.sevenseg)
+    plat.add_resources(plat.user_sw)
     m = BaseboardDemo(plat)
 
-    v_str = verilog.convert(m.get_fragment().get_fragment(platform=None),
-                            ports=[plat.adc.miso, plat.adc.mosi, plat.adc.clk,
-                                   plat.adc.cs_n, plat.sevenseg.enable0,
-                                   plat.sevenseg.enable1,
-                                   plat.sevenseg.enable2,
-                                   plat.sevenseg.enable3,
-                                   plat.sevenseg.segment0,
-                                   plat.sevenseg.segment1,
-                                   plat.sevenseg.segment2,
-                                   plat.sevenseg.segment3,
-                                   plat.sevenseg.segment4,
-                                   plat.sevenseg.segment5,
-                                   plat.sevenseg.segment6,
-                                   plat.sevenseg.segment7,
-                                   plat.sw])
-    with open("baseboard.v", "w") as fp:
-        fp.write(v_str)
-
-    backend = get_edatool("ise")(eda_api={ "name" : "build_newer",
-                                           "toplevel" : "top",
-                                           "files" : [
-                                                        {"name" : "../baseboard.v", "file_type" : "verilogSource"},
-                                                        {"name" : "../baseboard.ucf", "file_type" : "UCF"},
-                                                        {"name" : "../baseboard.tcl", "file_type" : "tclSource"}
-                                                     ],
-                                           "tool_options" : {
-                                                "ise" : {
-                                                            "family" : "Spartan3A",
-                                                            "device" : "xc3s200a",
-                                                            "package" : "vq100",
-                                                            "speed" : "-4"
-                                                        },
-                                            },
-                                         }, work_root="build_newer")
-    backend.configure(args=[])
+    if args.gen:
+        plan = plat.build(m, do_build=False, do_program=False)
+        products = plan.execute_local(run_script=False)
+    else:
+        plat.build(m, do_program=args.prog)
