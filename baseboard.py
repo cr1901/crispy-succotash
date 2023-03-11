@@ -2,7 +2,8 @@ import functools
 import argparse
 
 from amaranth import *
-from amaranth.compat import *
+from amaranth.compat import Module as CompatModule, Signal as CompatSignal, \
+    If, Case, Cat, C
 from amaranth.compat.genlib.cdc import MultiReg
 from amaranth_boards.mercury import *
 
@@ -11,9 +12,11 @@ from amaranth_boards.mercury import *
 # One dumps data over PMOD.
 
 
-class BaseboardDemo(Module):
-    def __init__(self, plat):
-        self.clock_domains.cd_sync = ClockDomain(reset_less=True)
+class BaseboardDemo(Elaboratable):
+    def elaborate(self, plat):
+        m = Module()
+        cd_sync = ClockDomain(reset_less=True)
+        m.domains += cd_sync
 
         adc = plat.request("spi_adc")
         ssd = plat.request("display_7seg")
@@ -22,11 +25,11 @@ class BaseboardDemo(Module):
         ch_sel = Signal(3)
         binary_in = Signal(10)
 
-        self.submodules.spiadc = SPICtrl(24, adc)
-        self.submodules.timer = Timer(1.0 / 200)
-        self.submodules.bin2bcd = Binary2Bcd()
-        self.submodules.sevenseg = SevenSegDriver(ssd, ssd_ctl)
-        self.submodules.degrees = Adc2Degrees()
+        m.submodules.spiadc = spiadc = SPICtrl(24, adc)
+        m.submodules.timer = timer = Timer(1.0 / 200)
+        m.submodules.bin2bcd = bin2bcd = Binary2Bcd()
+        m.submodules.sevenseg = sevenseg = SevenSegDriver(ssd, ssd_ctl)
+        m.submodules.degrees = degrees = Adc2Degrees()
 
         # ADC order is MSB-first (bit 0 == MSB)
         # Bit 7: Start bit
@@ -39,53 +42,57 @@ class BaseboardDemo(Module):
             C(0, 7)  # Padding
         )
 
-        self.comb += [ClockSignal("sync").eq(plat.request("clk50"))]
+        m.d.comb += [ClockSignal("sync").eq(plat.request("clk50")),]
 
-        self.comb += [
+        m.d.comb += [
             ch_sel.eq(Cat([plat.request("switch", i) for i in range(3)])),
-            self.spiadc.din.eq(spi_word),
-            self.sevenseg.din.eq(self.bin2bcd.dout),
-            self.degrees.adc.eq(binary_in),
-
-            Case(ch_sel, {
-                2: self.bin2bcd.din.eq(self.degrees.degrees),
-                "default": self.bin2bcd.din.eq(binary_in)
-            })
+            spiadc.din.eq(spi_word),
+            sevenseg.din.eq(bin2bcd.dout),
+            degrees.adc.eq(binary_in),
         ]
 
-        # self.comb += [
+        with m.Switch(ch_sel):
+            with m.Case(2):
+                m.d.comb += bin2bcd.din.eq(degrees.degrees)
+            with m.Default():
+                m.d.comb += bin2bcd.din.eq(binary_in)
+
+        # m.d.comb += [
         #     pmod[0].eq(adc.clk),
         #     pmod[1].eq(adc.cipo),
         #     pmod[2].eq(adc.copi),
         #     pmod[3].eq(adc.cs_n)
         # ]
 
-        self.sync += [
-            self.spiadc.en.eq(0),
-            self.bin2bcd.en.eq(0),
-
-            If(self.spiadc.done & self.timer.stb,
-                self.spiadc.en.eq(1),
-                self.bin2bcd.en.eq(1),
-                # leds.eq(self.spiadc.
-                binary_in.eq(self.spiadc.dout)
-               )
+        m.d.sync += [
+            spiadc.en.eq(0),
+            bin2bcd.en.eq(0),
         ]
 
+        with m.If(spiadc.done & timer.stb):
+            m.d.sync += [
+                spiadc.en.eq(1),
+                bin2bcd.en.eq(1),
+                # leds.eq(self.spiadc.
+                binary_in.eq(spiadc.dout)
+            ]
 
-class Debounce(Module):
+        return m
+
+
+class Debounce(CompatModule):
     def __init__(self, button):
-        self.out = Signal(1)
-        self.up_stb = Signal(1)
-        self.down_stb = Signal(1)
+        self.out = CompatSignal(1)
+        self.up_stb = CompatSignal(1)
+        self.down_stb = CompatSignal(1)
 
-        button_sys = Signal()
-        last_state = Signal(1)
-        cnt = Signal(16)
+        button_sys = CompatSignal()
+        last_state = CompatSignal(1)
+        cnt = CompatSignal(16)
 
-        self.comb += [self.out.eq(last_state)]
-        self.comb += [self.down_stb.eq((cnt == 65535) & last_state == 1)]
-        self.comb += [self.up_stb.eq((cnt == 65535) & last_state == 0)]
+        m.d.comb += [self.out.eq(last_state)]
+        m.d.comb += [self.down_stb.eq((cnt == 65535) & last_state == 1)]
+        m.d.comb += [self.up_stb.eq((cnt == 65535) & last_state == 0)]
 
         self.sync += [
             cnt.eq(0),
@@ -100,10 +107,10 @@ class Debounce(Module):
         self.specials += MultiReg(button, button_sys)
 
 
-class Timer(Module):
+class Timer(CompatModule):
     def __init__(self, per=1, clk_freq=50000000):
-        self.stb = Signal(1)
-        cnt = Signal(max=int(per * clk_freq), reset=int(per * clk_freq))
+        self.stb = CompatSignal(1)
+        cnt = CompatSignal(max=int(per * clk_freq), reset=int(per * clk_freq))
 
         self.sync += [
             self.stb.eq(0),
@@ -115,10 +122,10 @@ class Timer(Module):
         ]
 
 
-class Adc2Degrees(Module):
+class Adc2Degrees(CompatModule):
     def __init__(self):
-        self.adc = Signal(10)
-        self.degrees = Signal(10)
+        self.adc = CompatSignal(10)
+        self.degrees = CompatSignal(10)
 
         # c = (z - 82)/4 is a good approx to Celsius
         self.comb += [
@@ -128,19 +135,19 @@ class Adc2Degrees(Module):
         ]
 
 
-class Binary2Bcd(Module):
+class Binary2Bcd(CompatModule):
     def __init__(self):
-        self.en = Signal(1)
-        self.din = Signal(10)
-        self.dout = Signal(16)
+        self.en = CompatSignal(1)
+        self.din = CompatSignal(10)
+        self.dout = CompatSignal(16)
 
-        done = Signal(1, reset=1)
-        add3 = Signal(1)
-        add_done = Signal(1)
+        done = CompatSignal(1, reset=1)
+        add3 = CompatSignal(1)
+        add_done = CompatSignal(1)
 
-        tmp = Signal.like(self.din)
-        tmp_out = Signal.like(self.dout)
-        cnt = Signal(max=10, reset=10)
+        tmp = CompatSignal.like(self.din)
+        tmp_out = CompatSignal.like(self.dout)
+        cnt = CompatSignal(max=10, reset=10)
 
         add3_logic = functools.reduce(lambda x, y: x | y,
                                       [tmp_out[i:i + 4] >= 5
@@ -200,14 +207,14 @@ class Binary2Bcd(Module):
                        clocks={"sys": 20})
 
 
-class SevenSegDriver(Module):
+class SevenSegDriver(CompatModule):
     def __init__(self, pads, pads_ctl, clk_freq=50000000):
-        self.din = Signal(16)
+        self.din = CompatSignal(16)
 
-        dout = Signal(8)
-        curr_digit = Signal(4)
-        digit_sel = Signal(2)
-        enable = Signal(4, reset=15)
+        dout = CompatSignal(8)
+        curr_digit = CompatSignal(4)
+        digit_sel = CompatSignal(2)
+        enable = CompatSignal(4, reset=15)
 
         ###
 
@@ -262,22 +269,22 @@ class SevenSegDriver(Module):
         ]
 
 
-class SPICtrl(Module):
+class SPICtrl(CompatModule):
     def __init__(self, width, pads):
-        self.din = Signal(width)
-        self.en = Signal(1)
-        self.done = Signal(1, reset=1)
-        self.dout = Signal(width)
+        self.din = CompatSignal(width)
+        self.en = CompatSignal(1)
+        self.done = CompatSignal(1, reset=1)
+        self.dout = CompatSignal(width)
 
-        edge_cnt = Signal(max=width * 2, reset=width * 2)
-        in_prog = Signal(1)
-        tmp = Signal(width)
-        div = Signal(6, reset=63)
-        in_bit = Signal(1)
+        edge_cnt = CompatSignal(max=width * 2, reset=width * 2)
+        in_prog = CompatSignal(1)
+        tmp = CompatSignal(width)
+        div = CompatSignal(6, reset=63)
+        in_bit = CompatSignal(1)
 
-        sclk_pedge = Signal(1)
-        sclk_nedge = Signal(1)
-        sclk_prev = Signal(1)
+        sclk_pedge = CompatSignal(1)
+        sclk_nedge = CompatSignal(1)
+        sclk_prev = CompatSignal(1)
 
         self.comb += [
             sclk_pedge.eq(pads.clk & ~sclk_prev),
