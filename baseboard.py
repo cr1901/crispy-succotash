@@ -1,35 +1,31 @@
-import os
 import functools
-import subprocess
 import argparse
 
-from types import SimpleNamespace
-
-from nmigen.compat import *
-from nmigen.compat.genlib.cdc import MultiReg
-from nmigen.back import rtlil, verilog
-
-from nmigen_boards.mercury import *
+from amaranth import *
+from amaranth.compat import *
+from amaranth.compat.genlib.cdc import MultiReg
+from amaranth_boards.mercury import *
 
 # TODO: Button/logging test via VGA.
 # One button starts/stops logging
 # One dumps data over PMOD.
 
+
 class BaseboardDemo(Module):
     def __init__(self, plat):
         self.clock_domains.cd_sync = ClockDomain(reset_less=True)
 
-        adc = plat.request("adc")
-        ssd = plat.request("sevenseg")
+        adc = plat.request("spi_adc")
+        ssd = plat.request("display_7seg")
+        ssd_ctl = plat.request("display_7seg_ctrl")
         # pmod = plat.request("pmod_gpio")
-        bits = Signal(4)
         ch_sel = Signal(3)
         binary_in = Signal(10)
 
         self.submodules.spiadc = SPICtrl(24, adc)
-        self.submodules.timer = Timer(1.0/200)
+        self.submodules.timer = Timer(1.0 / 200)
         self.submodules.bin2bcd = Binary2Bcd()
-        self.submodules.sevenseg = SevenSegDriver(ssd)
+        self.submodules.sevenseg = SevenSegDriver(ssd, ssd_ctl)
         self.submodules.degrees = Adc2Degrees()
 
         # ADC order is MSB-first (bit 0 == MSB)
@@ -37,42 +33,43 @@ class BaseboardDemo(Module):
         spi_word = Cat(
             C(0, 8),
             C(0, 4),
-            ch_sel, # Channel select
-            C(1, 1), # Single-ended
-            C(1, 1), # Start
-            C(0, 7) # Padding
+            ch_sel,  # Channel select
+            C(1, 1),  # Single-ended
+            C(1, 1),  # Start
+            C(0, 7)  # Padding
         )
 
         self.comb += [ClockSignal("sync").eq(plat.request("clk50"))]
 
         self.comb += [
-            ch_sel.eq(Cat([plat.request("user_sw", i) for i in range(3)])),
+            ch_sel.eq(Cat([plat.request("switch", i) for i in range(3)])),
             self.spiadc.din.eq(spi_word),
             self.sevenseg.din.eq(self.bin2bcd.dout),
             self.degrees.adc.eq(binary_in),
 
             Case(ch_sel, {
-                2 : self.bin2bcd.din.eq(self.degrees.degrees),
-                "default" : self.bin2bcd.din.eq(binary_in)
+                2: self.bin2bcd.din.eq(self.degrees.degrees),
+                "default": self.bin2bcd.din.eq(binary_in)
             })
         ]
 
         # self.comb += [
         #     pmod[0].eq(adc.clk),
-        #     pmod[1].eq(adc.miso),
-        #     pmod[2].eq(adc.mosi),
+        #     pmod[1].eq(adc.cipo),
+        #     pmod[2].eq(adc.copi),
         #     pmod[3].eq(adc.cs_n)
         # ]
 
         self.sync += [
             self.spiadc.en.eq(0),
             self.bin2bcd.en.eq(0),
+
             If(self.spiadc.done & self.timer.stb,
                 self.spiadc.en.eq(1),
                 self.bin2bcd.en.eq(1),
                 # leds.eq(self.spiadc.
                 binary_in.eq(self.spiadc.dout)
-            )
+               )
         ]
 
 
@@ -96,20 +93,17 @@ class Debounce(Module):
                 cnt.eq(cnt + 1),
                 If(cnt == 65535,
                     last_state.eq(~last_state),
-                )
-            )
+                   )
+               )
         ]
 
-        self.specials += Multireg(button, button_sys)
-
-
-
+        self.specials += MultiReg(button, button_sys)
 
 
 class Timer(Module):
     def __init__(self, per=1, clk_freq=50000000):
         self.stb = Signal(1)
-        cnt = Signal(max = int(per*clk_freq), reset = int(per * clk_freq))
+        cnt = Signal(max=int(per * clk_freq), reset=int(per * clk_freq))
 
         self.sync += [
             self.stb.eq(0),
@@ -117,7 +111,7 @@ class Timer(Module):
             If(cnt == 0,
                 cnt.eq(int(per * clk_freq)),
                 self.stb.eq(1)
-            )
+               )
         ]
 
 
@@ -146,19 +140,16 @@ class Binary2Bcd(Module):
 
         tmp = Signal.like(self.din)
         tmp_out = Signal.like(self.dout)
-        cnt = Signal(max = 10, reset = 10)
+        cnt = Signal(max=10, reset=10)
 
-        ones = Signal(4)
-        tens = Signal(4)
-        hund = Signal(4)
-        thou = Signal(4)
-
-        add3_logic = functools.reduce(lambda x, y: x | y, [tmp_out[i:i+4] >= 5 for i in range(0, 16, 4)])
+        add3_logic = functools.reduce(lambda x, y: x | y,
+                                      [tmp_out[i:i + 4] >= 5
+                                       for i in range(0, 16, 4)])
 
         add_logic = [
-            If(tmp_out[i:i+4] >= 5,
-                tmp_out[i:i+4].eq(tmp_out[i:i+4] + 3)
-            ) for i in range(0, 16, 4)
+            If(tmp_out[i:i + 4] >= 5,
+                tmp_out[i:i + 4].eq(tmp_out[i:i + 4] + 3)
+               ) for i in range(0, 16, 4)
         ]
 
         self.comb += [add3.eq(add3_logic)]
@@ -172,7 +163,7 @@ class Binary2Bcd(Module):
                 tmp_out.eq(0),
                 cnt.eq(10),
                 add_done.eq(0)
-            ),
+               ),
 
             If(~done,
                 # After we add 3 we need to shift
@@ -184,12 +175,14 @@ class Binary2Bcd(Module):
 
                     If((cnt - 1) == 0,
                         done.eq(1)
-                    )
-                ).Else(
+                       )
+                   )
+                .Else(
                     add_logic,
                     add_done.eq(1)
                 )
-            ).Else(
+               )
+            .Else(
                 self.dout.eq(tmp_out)
             )
         ]
@@ -203,11 +196,12 @@ class Binary2Bcd(Module):
             for i in range(50):
                 yield
 
-        run_simulation(self, my_tb(self), vcd_name="bcd.vcd", clocks={"sys" : 20})
+        run_simulation(self, my_tb(self), vcd_name="bcd.vcd",
+                       clocks={"sys": 20})
 
 
 class SevenSegDriver(Module):
-    def __init__(self, pads, clk_freq=50000000):
+    def __init__(self, pads, pads_ctl, clk_freq=50000000):
         self.din = Signal(16)
 
         dout = Signal(8)
@@ -217,20 +211,17 @@ class SevenSegDriver(Module):
 
         ###
 
-        self.submodules.timer = Timer(1.0/240, 50000000)
+        self.submodules.timer = Timer(1.0 / 240, 50000000)
 
         switch_logic = [
-            If(digit_sel == i//4,
+            If(digit_sel == i // 4,
                 curr_digit.eq(self.din[i:i + 4]),
-                enable[i//4].eq(0)
-            ) for i in range(0, 16, 4)
+                enable[i // 4].eq(0)
+               ) for i in range(0, 16, 4)
         ]
 
         self.comb += [
-            pads.en0.eq(enable[0]),
-            pads.en1.eq(enable[1]),
-            pads.en2.eq(enable[2]),
-            pads.en3.eq(enable[3]),
+            pads_ctl.en.eq(enable),
             switch_logic
         ]
 
@@ -245,29 +236,29 @@ class SevenSegDriver(Module):
             pads.dp.eq(dout[0]),
         ]
 
-        self.comb +=  Case(curr_digit, {
-                0: dout.eq(0b11111100),
-                1: dout.eq(0b01100000),
-                2: dout.eq(0b11011010),
-                3: dout.eq(0b11110010),
-                4: dout.eq(0b01100110),
-                5: dout.eq(0b10110110),
-                6: dout.eq(0b10111110),
-                7: dout.eq(0b11100000),
-                8: dout.eq(0b11111110),
-                9: dout.eq(0b11110110),
-                0xA: dout.eq(0b11101110),
-                0xB: dout.eq(0b00111110),
-                0xC: dout.eq(0b10011100),
-                0xD: dout.eq(0b01111010),
-                0xE: dout.eq(0b10011110),
-                0xF: dout.eq(0b10001110)
+        self.comb += Case(curr_digit, {
+            0: dout.eq(0b11111100),
+            1: dout.eq(0b01100000),
+            2: dout.eq(0b11011010),
+            3: dout.eq(0b11110010),
+            4: dout.eq(0b01100110),
+            5: dout.eq(0b10110110),
+            6: dout.eq(0b10111110),
+            7: dout.eq(0b11100000),
+            8: dout.eq(0b11111110),
+            9: dout.eq(0b11110110),
+            0xA: dout.eq(0b11101110),
+            0xB: dout.eq(0b00111110),
+            0xC: dout.eq(0b10011100),
+            0xD: dout.eq(0b01111010),
+            0xE: dout.eq(0b10011110),
+            0xF: dout.eq(0b10001110)
         })
 
         self.sync += [
             If(self.timer.stb,
                 digit_sel.eq(digit_sel + 1)
-            )
+               )
         ]
 
 
@@ -275,13 +266,13 @@ class SPICtrl(Module):
     def __init__(self, width, pads):
         self.din = Signal(width)
         self.en = Signal(1)
-        self.done = Signal(1, reset = 1)
+        self.done = Signal(1, reset=1)
         self.dout = Signal(width)
 
-        edge_cnt = Signal(max = width * 2, reset = width * 2)
+        edge_cnt = Signal(max=width * 2, reset=width * 2)
         in_prog = Signal(1)
         tmp = Signal(width)
-        div = Signal(6, reset = 63)
+        div = Signal(6, reset=63)
         in_bit = Signal(1)
 
         sclk_pedge = Signal(1)
@@ -300,7 +291,7 @@ class SPICtrl(Module):
 
         self.comb += [
             self.done.eq(~in_prog),
-            pads.mosi.eq(tmp[-1]),
+            pads.copi.eq(tmp[-1]),
         ]
 
         self.sync += [
@@ -309,48 +300,47 @@ class SPICtrl(Module):
                 pads.cs.eq(0),
                 div.eq(63),
                 edge_cnt.eq(width * 2)
-            ),
+               ),
 
             If(self.en & ~in_prog,
                 tmp.eq(self.din),
                 in_prog.eq(1),
                 pads.cs.eq(1)
-            ),
+               ),
 
             If(in_prog,
                 div.eq(div - 1),
                 If(div == 0,
                     edge_cnt.eq(edge_cnt - 1),
                     pads.clk.eq(~pads.clk)
-                ),
-            ),
+                   ),
+               ),
 
             If(edge_cnt == 0,
                 in_prog.eq(0),
-            )
+               )
         ]
 
         self.sync += [
             If(sclk_nedge,
                 tmp.eq(Cat(in_bit, tmp[:-1]))
-            ),
+               ),
 
             If(sclk_pedge,
-                in_bit.eq(pads.miso)
-            )
+                in_bit.eq(pads.cipo)
+               )
         ]
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Mercury Baseboard Demo in Migen")
+    parser = argparse.ArgumentParser(description="Mercury Baseboard Demo in Migen")  # noqa: E501
     group = parser.add_mutually_exclusive_group()
-    group.add_argument('-p', dest='prog', action='store_true', help="Program Mercury after build.")
-    group.add_argument('-g', dest='gen', action='store_true', help="Generate verilog only- do not build or program.")
+    group.add_argument('-p', dest='prog', action='store_true', help="Program Mercury after build.")  # noqa: E501
+    group.add_argument('-g', dest='gen', action='store_true', help="Generate verilog only- do not build or program.")  # noqa: E501
     args = parser.parse_args()
 
     plat = MercuryPlatform()
-    plat.add_resources(plat.sevenseg)
-    plat.add_resources(plat.user_sw)
+    plat.add_resources(plat.baseboard_no_sram)
     m = BaseboardDemo(plat)
 
     if args.gen:
