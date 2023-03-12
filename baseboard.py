@@ -332,32 +332,33 @@ class SPICtrl(Elaboratable):
             self.pads.copi.eq(tmp[-1]),
         ]
 
-        with m.If(~in_prog):
-            m.d.sync += [
-                self.pads.clk.eq(0),
-                self.pads.cs.eq(0),
-                div.eq(63),
-                edge_cnt.eq(self.width * 2)
-            ]
-
-        with m.If(self.en & ~in_prog):
-            m.d.sync += [
-                tmp.eq(self.din),
-                in_prog.eq(1),
-                self.pads.cs.eq(1)
-            ]
-
-        with m.If(in_prog):
-            m.d.sync += div.eq(div - 1)
-
-            with m.If(div == 0):
+        with m.FSM():
+            with m.State("IDLE"):
                 m.d.sync += [
-                    edge_cnt.eq(edge_cnt - 1),
-                    self.pads.clk.eq(~self.pads.clk)
+                    self.pads.clk.eq(0),
+                    self.pads.cs.eq(0),
+                    div.eq(63),
+                    edge_cnt.eq(self.width * 2)
                 ]
 
-        with m.If(edge_cnt == 0):
-            m.d.sync += in_prog.eq(0)
+                with m.If(self.en):
+                    m.d.sync += [
+                        tmp.eq(self.din),
+                        self.pads.cs.eq(1)
+                    ]
+                    m.next = "XFER"
+
+            with m.State("XFER"):
+                m.d.sync += div.eq(div - 1)
+
+                with m.If(div == 0):
+                    m.d.sync += [
+                        edge_cnt.eq(edge_cnt - 1),
+                        self.pads.clk.eq(~self.pads.clk)
+                    ]
+
+                with m.If(edge_cnt == 0):
+                    m.next = "IDLE"
 
         with m.If(sclk_nedge):
             m.d.sync += tmp.eq(Cat(in_bit, tmp[:-1]))
