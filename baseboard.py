@@ -1,10 +1,10 @@
 import functools
 import argparse
+from typing import Any, Optional
 
 from amaranth import *
-from amaranth.compat import Module as CompatModule, Signal as CompatSignal, \
-    If, Case, Cat, C
-from amaranth.compat.genlib.cdc import MultiReg
+from amaranth.lib.cdc import FFSynchronizer
+from amaranth.sim import Simulator
 from amaranth_boards.mercury import *
 
 # TODO: Button/logging test via VGA.
@@ -13,6 +13,10 @@ from amaranth_boards.mercury import *
 
 
 class BaseboardDemo(Elaboratable):
+    def __init__(self):
+        self.timer = Timer(1.0 / 200)
+        self.degrees = Adc2Degrees()
+
     def elaborate(self, plat):
         m = Module()
         cd_sync = ClockDomain(reset_less=True)
@@ -26,10 +30,10 @@ class BaseboardDemo(Elaboratable):
         binary_in = Signal(10)
 
         m.submodules.spiadc = spiadc = SPICtrl(24, adc)
-        m.submodules.timer = timer = Timer(1.0 / 200)
+        m.submodules.timer = self.timer
         m.submodules.bin2bcd = bin2bcd = Binary2Bcd()
         m.submodules.sevenseg = sevenseg = SevenSegDriver(ssd, ssd_ctl)
-        m.submodules.degrees = degrees = Adc2Degrees()
+        m.submodules.degrees = self.degrees
 
         # ADC order is MSB-first (bit 0 == MSB)
         # Bit 7: Start bit
@@ -48,12 +52,12 @@ class BaseboardDemo(Elaboratable):
             ch_sel.eq(Cat([plat.request("switch", i) for i in range(3)])),
             spiadc.din.eq(spi_word),
             sevenseg.din.eq(bin2bcd.dout),
-            degrees.adc.eq(binary_in),
+            self.degrees.adc.eq(binary_in),
         ]
 
         with m.Switch(ch_sel):
             with m.Case(2):
-                m.d.comb += bin2bcd.din.eq(degrees.degrees)
+                m.d.comb += bin2bcd.din.eq(self.degrees.degrees)
             with m.Default():
                 m.d.comb += bin2bcd.din.eq(binary_in)
 
@@ -69,7 +73,7 @@ class BaseboardDemo(Elaboratable):
             bin2bcd.en.eq(0),
         ]
 
-        with m.If(spiadc.done & timer.stb):
+        with m.If(spiadc.done & self.timer.stb):
             m.d.sync += [
                 spiadc.en.eq(1),
                 bin2bcd.en.eq(1),
@@ -80,263 +84,288 @@ class BaseboardDemo(Elaboratable):
         return m
 
 
-class Debounce(CompatModule):
+class Debounce(Elaboratable):
     def __init__(self, button):
-        self.out = CompatSignal(1)
-        self.up_stb = CompatSignal(1)
-        self.down_stb = CompatSignal(1)
+        self.out = Signal(1)
+        self.up_stb = Signal(1)
+        self.down_stb = Signal(1)
+        self.button = button
 
-        button_sys = CompatSignal()
-        last_state = CompatSignal(1)
-        cnt = CompatSignal(16)
+    def elaborate(self, plat):
+        m = Module()
+
+        if not self.button:
+            self.button = plat.request("button")
+
+        button_sync = Signal()
+        last_state = Signal(1)
+        cnt = Signal(16)
 
         m.d.comb += [self.out.eq(last_state)]
         m.d.comb += [self.down_stb.eq((cnt == 65535) & last_state == 1)]
         m.d.comb += [self.up_stb.eq((cnt == 65535) & last_state == 0)]
 
-        self.sync += [
-            cnt.eq(0),
-            If(button_sys != last_state,
-                cnt.eq(cnt + 1),
-                If(cnt == 65535,
-                    last_state.eq(~last_state),
-                   )
-               )
-        ]
+        m.d.sync += cnt.eq(0)
 
-        self.specials += MultiReg(button, button_sys)
+        with m.If(button_sync != last_state):
+            m.d.sync += cnt.eq(cnt + 1)
+
+            with m.If(cnt == 65535):
+                m.d.sync += last_state.eq(~last_state)
+
+        self.specials += FFSynchronizer(self.button, button_sync)
+
+        return m
 
 
-class Timer(CompatModule):
-    def __init__(self, per=1, clk_freq=50000000):
-        self.stb = CompatSignal(1)
-        cnt = CompatSignal(max=int(per * clk_freq), reset=int(per * clk_freq))
+class Timer(Elaboratable):
+    def __init__(self, period: int, clk_freq: Optional[int] = None):
+        self.period = period
+        self.clk_freq = clk_freq
 
-        self.sync += [
+        self.stb = Signal(1)
+
+    def elaborate(self, platform):
+        m = Module()
+
+        if not self.clk_freq:
+            self.clk_freq = platform.default_clk_frequency
+
+        cnt = Signal(range(0, int(self.period * self.clk_freq)),
+                     reset=int(self.period * self.clk_freq))
+
+        m.d.sync += [
             self.stb.eq(0),
             cnt.eq(cnt - 1),
-            If(cnt == 0,
-                cnt.eq(int(per * clk_freq)),
-                self.stb.eq(1)
-               )
         ]
 
+        with m.If(cnt == 0):
+            m.d.sync += [
+                cnt.eq(int(self.period * self.clk_freq)),
+                self.stb.eq(1)
+            ]
 
-class Adc2Degrees(CompatModule):
+        return m
+
+
+class Adc2Degrees(Elaboratable):
     def __init__(self):
-        self.adc = CompatSignal(10)
-        self.degrees = CompatSignal(10)
+        self.adc = Signal(10)
+        self.degrees = Signal(10)
+
+    def elaborate(self, plat):
+        m = Module()
 
         # c = (z - 82)/4 is a good approx to Celsius
-        self.comb += [
-            self.degrees.eq(
-                (self.adc - 82) >> 2
-            )
-        ]
+        m.d.comb += self.degrees.eq((self.adc - 82) >> 2)
+
+        return m
 
 
-class Binary2Bcd(CompatModule):
+class Binary2Bcd(Elaboratable):
     def __init__(self):
-        self.en = CompatSignal(1)
-        self.din = CompatSignal(10)
-        self.dout = CompatSignal(16)
+        self.en = Signal(1)
+        self.din = Signal(10)
+        self.dout = Signal(16)
 
-        done = CompatSignal(1, reset=1)
-        add3 = CompatSignal(1)
-        add_done = CompatSignal(1)
+    def elaborate(self, plat):
+        m = Module()
+        done = Signal(1, reset=1)
+        add3 = Signal(1)
+        add_done = Signal(1)
 
-        tmp = CompatSignal.like(self.din)
-        tmp_out = CompatSignal.like(self.dout)
-        cnt = CompatSignal(max=10, reset=10)
+        tmp = Signal.like(self.din)
+        tmp_out = Signal.like(self.dout)
+        cnt = Signal(range(0, 10), reset=10)
 
         add3_logic = functools.reduce(lambda x, y: x | y,
                                       [tmp_out[i:i + 4] >= 5
                                        for i in range(0, 16, 4)])
 
-        add_logic = [
-            If(tmp_out[i:i + 4] >= 5,
-                tmp_out[i:i + 4].eq(tmp_out[i:i + 4] + 3)
-               ) for i in range(0, 16, 4)
-        ]
+        m.d.comb += add3.eq(add3_logic)
 
-        self.comb += [add3.eq(add3_logic)]
-
-        self.sync += [
-            # It's really not a big deal if this restarts if self.en if
+        with m.If(self.en):
+            # It's really not a big deal if this restarts if self.en is
             # held asserted.
-            If(self.en,
+            m.d.sync += [
                 done.eq(0),
                 tmp.eq(self.din),
                 tmp_out.eq(0),
                 cnt.eq(10),
                 add_done.eq(0)
-               ),
+            ]
 
-            If(~done,
-                # After we add 3 we need to shift
-                If(~add3 | add_done,
+        with m.If(~done):
+            # After we add 3 we need to shift
+            with m.If(~add3 | add_done):
+                m.d.sync += [
                     tmp.eq(Cat(0, tmp[0:-1])),
                     tmp_out.eq(Cat(tmp[-1], tmp_out[0:-1])),
                     add_done.eq(0),
                     cnt.eq(cnt - 1),
+                ]
 
-                    If((cnt - 1) == 0,
-                        done.eq(1)
-                       )
-                   )
-                .Else(
-                    add_logic,
-                    add_done.eq(1)
-                )
-               )
-            .Else(
-                self.dout.eq(tmp_out)
-            )
-        ]
+                with m.If((cnt - 1) == 0):
+                    m.d.sync += done.eq(1)
+
+            with m.Else():
+                m.d.sync += add_done.eq(1)
+                for i in range(0, 16, 4):
+                    with m.If(tmp_out[i:i + 4] >= 5):
+                        m.d.sync += tmp_out[i:i + 4].eq(tmp_out[i:i + 4] + 3)
+
+        with m.Else():
+            m.d.sync += self.dout.eq(tmp_out)
+
+        return m
 
     def do_tb(self):
-        def my_tb(dut):
-            yield dut.en.eq(1)
-            yield dut.din.eq(0x3FF)
+        def my_tb():
+            yield self.en.eq(1)
+            yield self.din.eq(0x3FF)
             yield
-            yield dut.en.eq(0)
+            yield self.en.eq(0)
             for i in range(50):
                 yield
 
-        run_simulation(self, my_tb(self), vcd_name="bcd.vcd",
-                       clocks={"sys": 20})
+        sim = Simulator(self)
+        sim.add_clock(20e-9)
+        sim.add_sync_process(my_tb)
+
+        with sim.write_vcd("bcd.vcd", "bcd.gtkw"):
+            sim.run()
 
 
-class SevenSegDriver(CompatModule):
+class SevenSegDriver(Elaboratable):
     def __init__(self, pads, pads_ctl, clk_freq=50000000):
-        self.din = CompatSignal(16)
+        self.din = Signal(16)
+        self.pads = pads
+        self.pads_ctl = pads_ctl
+        self.clk_freq = clk_freq
 
-        dout = CompatSignal(8)
-        curr_digit = CompatSignal(4)
-        digit_sel = CompatSignal(2)
-        enable = CompatSignal(4, reset=15)
+        self.timer = Timer(1.0 / 240, clk_freq)
 
-        ###
+    def elaborate(self, plat):
+        m = Module()
 
-        self.submodules.timer = Timer(1.0 / 240, 50000000)
+        # FIXME: Check for something SPI-pads-shaped to verify correct
+        # input type.
+        if isinstance(self.pads, str):
+            self.pads = plat.request(self.pads)
+        if isinstance(self.pads, str):
+            self.pads = plat.request(self.pads_ctl)
 
-        switch_logic = [
-            If(digit_sel == i // 4,
-                curr_digit.eq(self.din[i:i + 4]),
-                enable[i // 4].eq(0)
-               ) for i in range(0, 16, 4)
-        ]
+        dout = Signal(8)
+        curr_digit = Signal(4)
+        digit_sel = Signal(2)
+        enable = Signal(4, reset=15)
 
-        self.comb += [
-            pads_ctl.en.eq(enable),
-            switch_logic
-        ]
+        m.submodules.timer = self.timer
 
-        self.comb += [
-            pads.a.eq(dout[7]),
-            pads.b.eq(dout[6]),
-            pads.c.eq(dout[5]),
-            pads.d.eq(dout[4]),
-            pads.e.eq(dout[3]),
-            pads.f.eq(dout[2]),
-            pads.g.eq(dout[1]),
-            pads.dp.eq(dout[0]),
-        ]
+        m.d.comb += self.pads_ctl.en.eq(enable)
 
-        self.comb += Case(curr_digit, {
-            0: dout.eq(0b11111100),
-            1: dout.eq(0b01100000),
-            2: dout.eq(0b11011010),
-            3: dout.eq(0b11110010),
-            4: dout.eq(0b01100110),
-            5: dout.eq(0b10110110),
-            6: dout.eq(0b10111110),
-            7: dout.eq(0b11100000),
-            8: dout.eq(0b11111110),
-            9: dout.eq(0b11110110),
-            0xA: dout.eq(0b11101110),
-            0xB: dout.eq(0b00111110),
-            0xC: dout.eq(0b10011100),
-            0xD: dout.eq(0b01111010),
-            0xE: dout.eq(0b10011110),
-            0xF: dout.eq(0b10001110)
-        })
+        # Switch Logic
+        for i in range(0, 16, 4):
+            with m.If(digit_sel == i // 4):
+                m.d.comb += [
+                    curr_digit.eq(self.din[i:i + 4]),
+                    enable[i // 4].eq(0)
+                ]
 
-        self.sync += [
-            If(self.timer.stb,
-                digit_sel.eq(digit_sel + 1)
-               )
-        ]
+        for i, p in enumerate(reversed(("a", "b", "c", "d",
+                                       "e", "f", "g", "dp"))):
+            m.d.comb += getattr(self.pads, p).eq(dout[i])
+
+        with m.Switch(curr_digit):
+            for i, pat in enumerate((0b11111100, 0b01100000, 0b11011010, 0b11110010,  # noqa: E501
+                                    0b01100110, 0b10110110, 0b10111110, 0b11100000,  # noqa: E501
+                                    0b11111110, 0b11110110, 0b11101110, 0b00111110,  # noqa: E501
+                                    0b10011100, 0b01111010, 0b10011110, 0b10001110)):  # noqa: E501
+                with m.Case(i):
+                    m.d.comb += dout.eq(pat)
+
+        with m.If(self.timer.stb):
+            m.d.sync += digit_sel.eq(digit_sel + 1)
+
+        return m
 
 
-class SPICtrl(CompatModule):
-    def __init__(self, width, pads):
-        self.din = CompatSignal(width)
-        self.en = CompatSignal(1)
-        self.done = CompatSignal(1, reset=1)
-        self.dout = CompatSignal(width)
+class SPICtrl(Elaboratable):
+    def __init__(self, width: int, pads: Any):
+        self.din = Signal(width)
+        self.en = Signal(1)
+        self.done = Signal(1, reset=1)
+        self.dout = Signal(width)
+        self.width = width
+        self.pads = pads
 
-        edge_cnt = CompatSignal(max=width * 2, reset=width * 2)
-        in_prog = CompatSignal(1)
-        tmp = CompatSignal(width)
-        div = CompatSignal(6, reset=63)
-        in_bit = CompatSignal(1)
+    def elaborate(self, plat):
+        m = Module()
 
-        sclk_pedge = CompatSignal(1)
-        sclk_nedge = CompatSignal(1)
-        sclk_prev = CompatSignal(1)
+        # FIXME: Check for something SPI-pads-shaped to verify correct
+        # input type.
+        if isinstance(self.pads, str):
+            self.pads = plat.request(self.pads)
 
-        self.comb += [
-            sclk_pedge.eq(pads.clk & ~sclk_prev),
-            sclk_nedge.eq(~pads.clk & sclk_prev),
+        edge_cnt = Signal(range(0, self.width * 2), reset=self.width * 2)
+        in_prog = Signal(1)
+        tmp = Signal(self.width)
+        div = Signal(6, reset=63)
+        in_bit = Signal(1)
+
+        sclk_pedge = Signal(1)
+        sclk_nedge = Signal(1)
+        sclk_prev = Signal(1)
+
+        m.d.comb += [
+            sclk_pedge.eq(self.pads.clk & ~sclk_prev),
+            sclk_nedge.eq(~self.pads.clk & sclk_prev),
             self.dout.eq(tmp)
         ]
 
-        self.sync += [
-            sclk_prev.eq(pads.clk)
+        m.d.sync += [
+            sclk_prev.eq(self.pads.clk)
         ]
 
-        self.comb += [
+        m.d.comb += [
             self.done.eq(~in_prog),
-            pads.copi.eq(tmp[-1]),
+            self.pads.copi.eq(tmp[-1]),
         ]
 
-        self.sync += [
-            If(~in_prog,
-                pads.clk.eq(0),
-                pads.cs.eq(0),
+        with m.If(~in_prog):
+            m.d.sync += [
+                self.pads.clk.eq(0),
+                self.pads.cs.eq(0),
                 div.eq(63),
-                edge_cnt.eq(width * 2)
-               ),
+                edge_cnt.eq(self.width * 2)
+            ]
 
-            If(self.en & ~in_prog,
+        with m.If(self.en & ~in_prog):
+            m.d.sync += [
                 tmp.eq(self.din),
                 in_prog.eq(1),
-                pads.cs.eq(1)
-               ),
+                self.pads.cs.eq(1)
+            ]
 
-            If(in_prog,
-                div.eq(div - 1),
-                If(div == 0,
+        with m.If(in_prog):
+            m.d.sync += div.eq(div - 1)
+
+            with m.If(div == 0):
+                m.d.sync += [
                     edge_cnt.eq(edge_cnt - 1),
-                    pads.clk.eq(~pads.clk)
-                   ),
-               ),
+                    self.pads.clk.eq(~self.pads.clk)
+                ]
 
-            If(edge_cnt == 0,
-                in_prog.eq(0),
-               )
-        ]
+        with m.If(edge_cnt == 0):
+            m.d.sync += in_prog.eq(0)
 
-        self.sync += [
-            If(sclk_nedge,
-                tmp.eq(Cat(in_bit, tmp[:-1]))
-               ),
+        with m.If(sclk_nedge):
+            m.d.sync += tmp.eq(Cat(in_bit, tmp[:-1]))
 
-            If(sclk_pedge,
-                in_bit.eq(pads.cipo)
-               )
-        ]
+        with m.If(sclk_pedge):
+            m.d.sync += in_bit.eq(self.pads.cipo)
+
+        return m
 
 
 if __name__ == "__main__":
@@ -348,7 +377,7 @@ if __name__ == "__main__":
 
     plat = MercuryPlatform()
     plat.add_resources(plat.baseboard_no_sram)
-    m = BaseboardDemo(plat)
+    m = BaseboardDemo()
 
     if args.gen:
         plan = plat.build(m, do_build=False, do_program=False)
