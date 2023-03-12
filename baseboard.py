@@ -3,6 +3,7 @@ import argparse
 from typing import Any, Optional
 
 from amaranth import *
+from amaranth.lib import data
 from amaranth.lib.cdc import FFSynchronizer
 from amaranth.sim import Simulator
 from amaranth_boards.mercury import *
@@ -29,28 +30,17 @@ class BaseboardDemo(Elaboratable):
         ch_sel = Signal(3)
         binary_in = Signal(10)
 
-        m.submodules.spiadc = spiadc = SPICtrl(24, adc)
+        m.submodules.spiadc = spiadc = SPICtrl(adc)
         m.submodules.timer = self.timer
         m.submodules.bin2bcd = bin2bcd = Binary2Bcd()
         m.submodules.sevenseg = sevenseg = SevenSegDriver(ssd, ssd_ctl)
         m.submodules.degrees = self.degrees
 
-        # ADC order is MSB-first (bit 0 == MSB)
-        # Bit 7: Start bit
-        spi_word = Cat(
-            C(0, 8),
-            C(0, 4),
-            ch_sel,  # Channel select
-            C(1, 1),  # Single-ended
-            C(1, 1),  # Start
-            C(0, 7)  # Padding
-        )
-
-        m.d.comb += [ClockSignal("sync").eq(plat.request("clk50")),]
+        m.d.comb += ClockSignal("sync").eq(plat.request("clk50"))
 
         m.d.comb += [
             ch_sel.eq(Cat([plat.request("switch", i) for i in range(3)])),
-            spiadc.din.eq(spi_word),
+            spiadc.ch_sel.eq(ch_sel),
             sevenseg.din.eq(bin2bcd.dout),
             self.degrees.adc.eq(binary_in),
         ]
@@ -291,13 +281,21 @@ class SevenSegDriver(Elaboratable):
 
 
 class SPICtrl(Elaboratable):
-    def __init__(self, width: int, pads: Any):
-        self.din = Signal(width)
+    def __init__(self, pads: Any):
+        spi_layout = data.FlexibleLayout(24, {
+            "ch_sel": data.Field(unsigned(3), offset=12),
+            "single_ended": data.Field(unsigned(1), offset=15),
+            "start": data.Field(unsigned(1), offset=16)
+        })
+
+        self.dout = Signal(spi_layout)
+        self.ch_sel = Signal(spi_layout["ch_sel"].shape)
         self.en = Signal(1)
         self.done = Signal(1, reset=1)
-        self.dout = Signal(width)
-        self.width = width
         self.pads = pads
+
+        self.backing_store = Signal(spi_layout)
+        self.cmd = data.View(spi_layout, self.backing_store)
 
     def elaborate(self, plat):
         m = Module()
@@ -307,9 +305,10 @@ class SPICtrl(Elaboratable):
         if isinstance(self.pads, str):
             self.pads = plat.request(self.pads)
 
-        edge_cnt = Signal(range(0, self.width * 2), reset=self.width * 2)
+        width = len(self.backing_store)
+        edge_cnt = Signal(range(0, width * 2),
+                          reset=width * 2)
         in_prog = Signal(1)
-        tmp = Signal(self.width)
         div = Signal(6, reset=63)
         in_bit = Signal(1)
 
@@ -320,7 +319,7 @@ class SPICtrl(Elaboratable):
         m.d.comb += [
             sclk_pedge.eq(self.pads.clk & ~sclk_prev),
             sclk_nedge.eq(~self.pads.clk & sclk_prev),
-            self.dout.eq(tmp)
+            self.dout.eq(self.backing_store)
         ]
 
         m.d.sync += [
@@ -329,7 +328,7 @@ class SPICtrl(Elaboratable):
 
         m.d.comb += [
             self.done.eq(~in_prog),
-            self.pads.copi.eq(tmp[-1]),
+            self.pads.copi.eq(self.backing_store[-1]),
         ]
 
         with m.FSM():
@@ -338,12 +337,15 @@ class SPICtrl(Elaboratable):
                     self.pads.clk.eq(0),
                     self.pads.cs.eq(0),
                     div.eq(63),
-                    edge_cnt.eq(self.width * 2)
+                    edge_cnt.eq(width * 2)
                 ]
 
                 with m.If(self.en):
                     m.d.sync += [
-                        tmp.eq(self.din),
+                        self.backing_store.eq(0),
+                        self.cmd.ch_sel.eq(self.ch_sel),
+                        self.cmd.single_ended.eq(1),
+                        self.cmd.start.eq(1),
                         self.pads.cs.eq(1)
                     ]
                     m.next = "XFER"
@@ -361,7 +363,8 @@ class SPICtrl(Elaboratable):
                     m.next = "IDLE"
 
         with m.If(sclk_nedge):
-            m.d.sync += tmp.eq(Cat(in_bit, tmp[:-1]))
+            m.d.sync += self.backing_store.eq(Cat(in_bit,
+                                                  self.backing_store[:-1]))
 
         with m.If(sclk_pedge):
             m.d.sync += in_bit.eq(self.pads.cipo)
